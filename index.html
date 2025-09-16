@@ -16,6 +16,7 @@
     button,.btn,select{appearance:none;border:1px solid rgba(255,255,255,.15);background:#1b2340;color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer}
     .btn-accent{background:linear-gradient(135deg,#5aa2ff,#12c2e9);border:none;color:#fff}
     .btn-warn{background:linear-gradient(135deg,#ffd166,#ffb703);border:none;color:#000}
+    .btn-danger{background:linear-gradient(135deg,#ff6b6b,#ff8d8d);border:none;color:#fff}
     .grid{display:grid;gap:12px}
     @media(min-width:900px){.grid-3{grid-template-columns:repeat(3,1fr)}}
     .card{background:#141a2e;border:1px solid rgba(255,255,255,.08);border-radius:14px}
@@ -49,6 +50,8 @@
     /* Toast */
     #toast{position:fixed;left:50%;bottom:88px;transform:translateX(-50%);background:rgba(0,0,0,.8);color:#fff;padding:10px 14px;border-radius:999px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:1000}
     #toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
+    .muted{color:var(--muted)}
+    .tx-cancelled{opacity:.55;text-decoration:line-through}
   </style>
 </head>
 <body>
@@ -95,7 +98,7 @@
       <div class="card"><div class="inner metric" id="metricNet">
         <div class="label">収支合計（±がわかる表示）</div>
         <div class="value" id="thisInOut">¥0</div>
-        <div class="small" id="inoutBreak">内訳：収入 ¥0 / 支出 ¥0（※振替は集計に含めない）</div>
+        <div class="small" id="inoutBreak">内訳：収入 ¥0 / 支出 ¥0（※振替と取消は集計に含めない）</div>
       </div></div>
     </section>
 
@@ -107,7 +110,7 @@
         <table id="txTable">
           <thead>
             <tr>
-              <th>日付</th><th>区分</th><th>カテゴリー</th><th>メモ</th><th style="text-align:right">金額</th>
+              <th>日付</th><th>区分</th><th>カテゴリー</th><th>メモ</th><th style="text-align:right">金額</th><th>操作</th>
             </tr>
           </thead>
           <tbody id="txBody"></tbody>
@@ -161,6 +164,24 @@
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
           <button type="button" class="btn" onclick="document.getElementById('dlgTx').close()">閉じる</button>
           <button type="submit" class="btn btn-accent">追加</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- 取引編集（金額・メモ変更） -->
+  <dialog id="dlgEdit" class="modal">
+    <div class="inner">
+      <h3>取引の変更</h3>
+      <form id="editForm" class="form">
+        <div class="row">
+          <label>金額<input id="editAmount" type="number" required /></label>
+          <label>メモ<input id="editMemo" type="text" /></label>
+        </div>
+        <div class="small muted" id="editNote"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+          <button type="button" class="btn" onclick="document.getElementById('dlgEdit').close()">キャンセル</button>
+          <button class="btn btn-accent">保存</button>
         </div>
       </form>
     </div>
@@ -266,6 +287,8 @@
       currentBalance: document.getElementById('currentBalance'), thisCF: document.getElementById('thisCF'), thisInOut: document.getElementById('thisInOut'), inoutBreak: document.getElementById('inoutBreak'), periodRange: document.getElementById('periodRange'), viewMode: document.getElementById('viewMode'), txBody: document.getElementById('txBody'),
       // tx
       dlgTx: document.getElementById('dlgTx'), txForm: document.getElementById('txForm'), txDate: document.getElementById('txDate'), txType: document.getElementById('txType'), txCategory: document.getElementById('txCategory'), txAmount: document.getElementById('txAmount'), txMemo: document.getElementById('txMemo'),
+      // edit
+      dlgEdit: document.getElementById('dlgEdit'), editForm: document.getElementById('editForm'), editAmount: document.getElementById('editAmount'), editMemo: document.getElementById('editMemo'), editNote: document.getElementById('editNote'),
       // cash
       dlgCash: document.getElementById('dlgCash'), cashForm: document.getElementById('cashForm'), cashAmount: document.getElementById('cashAmount'),
       // accounts
@@ -295,20 +318,46 @@
     function getMain(){ return loadAccs().find(a=>a.isMain); }
     function setMainBalance(v){ const accs=loadAccs(); const m=accs.find(a=>a.isMain); if(m){ m.balance=Number(v)||0; saveAccs(accs);} }
 
+    // ===== ID付与（既存データ救済） =====
+    function ensureIds(){
+      const txs = loadTxs();
+      let changed = false;
+      for(const t of txs){ if(t.id==null){ t.id = Date.now()+Math.floor(Math.random()*1e6); changed = true; } }
+      if(changed) saveTxs(txs);
+      return txs;
+    }
+
     // 初期化：新規なら0円メイン口座
-    function migrate(){ const accs = loadAccs(); if(accs.length===0){ const main = { id: Date.now(), name:'メイン', balance: 0, isMain:true }; saveAccs([main]); } }
+    function migrate(){ const accs = loadAccs(); if(accs.length===0){ const main = { id: Date.now(), name:'メイン', balance: 0, isMain:true }; saveAccs([main]); } ensureIds(); }
 
     function addAccount(name, balance){ const accs = loadAccs(); accs.push({ id: Date.now()+Math.floor(Math.random()*1000), name, balance:Number(balance)||0, isMain:false }); saveAccs(accs); }
     function deleteAccount(id){ const accs = loadAccs(); const a = accs.find(x=>x.id===id); if(!a) return; if(a.isMain){ alert('メイン口座は削除できません'); return; } if(!confirm(`口座「${a.name}」を削除しますか？`)) return; const idx = accs.findIndex(x=>x.id===id); accs.splice(idx,1); saveAccs(accs); }
     function setAsMain(id){ const accs = loadAccs(); accs.forEach(a=>a.isMain=(a.id===id)); saveAccs(accs); }
 
-    function listAccountsUI(){ const accs = loadAccs(); el.accountsList.innerHTML = accs.map(a=>`<div style="display:flex;gap:8px;align-items:center;margin:6px 0"><span class="tag ${a.isMain?'income':''}">${a.isMain?'メイン':''}</span><strong>${a.name}</strong><span class="small">${yen(a.balance)}</span><span style="flex:1"></span>${a.isMain?'':`<button class="btn" onclick="setAsMain(${a.id});render();listAccountsUI();">メインにする</button>`}${a.isMain?'':`<button class="btn" onclick="deleteAccount(${a.id});render();listAccountsUI();">削除</button>`}</div>`).join(''); }
+    function listAccountsUI(){ const accs = loadAccs(); el.accountsList.innerHTML = accs.map(a=>`<div style="display:flex;gap:8px;align-items:center;margin:6px 0"><span class="tag ${a.isMain?'income':''}">${a.isMain?'メイン':''}</span><strong>${a.name}</strong><span class="small">${yen(a.balance)}</span><span style="flex:1"></span>${a.isMain?'':`<button class="btn" onclick="setAsMain(${a.id});render();listAccountsUI();">メインにする</button>`}${a.isMain?'':`<button class="btn btn-danger" onclick="deleteAccount(${a.id});render();listAccountsUI();">削除</button>`}</div>`).join(''); }
+
+    // ===== 取引の口座反映 =====
+    function applyBalanceForTx(tx, sign){
+      const accs = loadAccs();
+      const m = accs.find(a=>a.isMain);
+      if(!m) return;
+      const amt = Number(tx.amount)||0;
+      if(tx.type==='income'){ m.balance += sign*amt; }
+      else if(tx.type==='expense'){ m.balance -= sign*amt; }
+      else if(tx.type==='transfer'){
+        const target = accs.find(a=>a.name=== (tx.direction==='main_to_acc'? tx.toName : tx.fromName) || a.id===tx.toId);
+        if(!target) { saveAccs(accs); return; }
+        if(tx.direction==='main_to_acc'){ m.balance -= sign*amt; target.balance += sign*amt; }
+        else { target.balance -= sign*amt; m.balance += sign*amt; }
+      }
+      saveAccs(accs);
+    }
 
     // ===== 表示 & 集計 =====
     function render(){
       const main = getMain(); if(!main){ migrate(); return render(); }
       el.currentBalance.textContent = yen(main.balance);
-      const txs = loadTxs();
+      const txs = ensureIds();
       const now = new Date();
       const mode = el.viewMode.value;
       let start, end, label;
@@ -319,23 +368,30 @@
 
       const filtered = txs.filter(t=> t.date>=start && t.date<=end);
       let sumIn=0, sumOut=0;
-      filtered.forEach(t=>{ if(t.type==='income') sumIn+=t.amount; else if(t.type==='expense') sumOut+=t.amount; });
+      filtered.forEach(t=>{ if(t.canceled) return; if(t.type==='income') sumIn+=t.amount; else if(t.type==='expense') sumOut+=t.amount; });
       const cf = sumIn - sumOut;
       el.thisCF.textContent = yen(cf);
       el.thisInOut.textContent = (cf>=0?'+':'−') + yen(Math.abs(cf)).replace('¥','');
       document.getElementById('metricCF').classList.toggle('positive', cf>=0);
       document.getElementById('metricCF').classList.toggle('negative', cf<0);
-      el.inoutBreak.textContent = `内訳：収入 ${yen(sumIn)} / 支出 ${yen(sumOut)}（※振替は集計に含めない）`;
+      el.inoutBreak.textContent = `内訳：収入 ${yen(sumIn)} / 支出 ${yen(sumOut)}（※振替と取消は集計に含めない）`;
 
       // テーブル
       el.txBody.innerHTML = '';
-      filtered.sort((a,b)=> b.date.localeCompare(a.date)).forEach(t=>{
+      filtered.sort((a,b)=> b.date.localeCompare(a.date) || b.id - a.id).forEach(t=>{
         const isTransfer = t.type==='transfer';
         const tag = isTransfer? '<span class="tag transfer">振替</span>' : (t.type==='income'? '<span class="tag income">収入</span>' : '<span class="tag expense">支出</span>');
         const cat = isTransfer ? (t.direction==='main_to_acc'? `振替(メイン→${t.toName})` : `振替(${t.fromName}→メイン)`) : t.category;
         const amt = isTransfer ? yen(t.amount) : (t.type==='income'? ('+'+yen(t.amount)) : ('-'+yen(t.amount)));
         const tr=document.createElement('tr');
+        if(t.canceled) tr.classList.add('tx-cancelled');
         tr.innerHTML = `<td>${t.date}</td><td>${tag}</td><td>${cat}</td><td>${t.memo||''}</td><td style="text-align:right">${amt}</td>`;
+        // 操作列
+        const tdOps = document.createElement('td');
+        const btnEdit = document.createElement('button'); btnEdit.className='btn'; btnEdit.textContent='金額変更'; btnEdit.onclick=()=>editTxAmount(t.id);
+        const btnCancel = document.createElement('button'); btnCancel.className= t.canceled? 'btn' : 'btn btn-danger'; btnCancel.style.marginLeft='6px'; btnCancel.textContent = t.canceled? '取消を元に戻す' : '取引を取り消す'; btnCancel.onclick=()=>toggleCancelTx(t.id);
+        tdOps.appendChild(btnEdit); tdOps.appendChild(btnCancel);
+        tr.appendChild(tdOps);
         el.txBody.appendChild(tr);
       });
     }
@@ -344,7 +400,46 @@
     const CATS = CATEGORIES;
     function setCategories(type){ el.txCategory.innerHTML=''; (CATS[type]||[]).forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; el.txCategory.appendChild(o); }); }
     function openAdd(type){ el.txType.value = type; setCategories(type); el.txDate.value = new Date().toISOString().slice(0,10); el.txAmount.value=''; el.txMemo.value=''; document.getElementById('dlgTxTitle').textContent = type==='income'? '収入を追加' : '支出を追加'; el.dlgTx.showModal(); }
-    function addTxFromForm(){ const txs = loadTxs(); const tx = {date:el.txDate.value,type:el.txType.value,category:el.txCategory.value,amount:Number(el.txAmount.value),memo:el.txMemo.value}; txs.push(tx); saveTxs(txs); const accs = loadAccs(); const m = accs.find(a=>a.isMain); if(tx.type==='income') m.balance += tx.amount; else if(tx.type==='expense') m.balance -= tx.amount; saveAccs(accs); el.dlgTx.close(); render(); }
+    function addTxFromForm(){ const txs = ensureIds(); const tx = {id: Date.now()+Math.floor(Math.random()*1e6), date:el.txDate.value,type:el.txType.value,category:el.txCategory.value,amount:Number(el.txAmount.value),memo:el.txMemo.value}; txs.push(tx); saveTxs(txs); applyBalanceForTx(tx, +1); el.dlgTx.close(); render(); }
+
+    // ===== 取引編集（額・メモ） =====
+    let editingId = null;
+    function editTxAmount(id){
+      const txs = ensureIds();
+      const t = txs.find(x=>x.id===id); if(!t) return;
+      editingId = id;
+      el.editAmount.value = t.amount;
+      el.editMemo.value = t.memo||'';
+      el.editNote.textContent = `${t.date} ｜ ${t.type==='transfer'?'振替':t.category}`;
+      el.dlgEdit.showModal();
+    }
+    function saveEdit(e){
+      e.preventDefault();
+      const txs = ensureIds();
+      const t = txs.find(x=>x.id===editingId); if(!t){ el.dlgEdit.close(); return; }
+      const newAmt = Math.max(0, Number(el.editAmount.value||0));
+      const delta = newAmt - Number(t.amount||0);
+      t.amount = newAmt; t.memo = el.editMemo.value;
+      saveTxs(txs);
+      // 取消中は残高へ反映しない
+      if(!t.canceled){
+        if(t.type==='income') applyBalanceForTx({ ...t, amount: Math.abs(delta), type:'income' }, delta>=0? +1 : -1);
+        else if(t.type==='expense') applyBalanceForTx({ ...t, amount: Math.abs(delta), type:'expense' }, delta>=0? +1 : -1);
+        else if(t.type==='transfer') applyBalanceForTx({ ...t, amount: Math.abs(delta), type:'transfer' }, delta>=0? +1 : -1);
+      }
+      el.dlgEdit.close(); render();
+    }
+
+    // ===== 取消/復活 =====
+    function toggleCancelTx(id){
+      const txs = ensureIds();
+      const t = txs.find(x=>x.id===id); if(!t) return;
+      t.canceled = !t.canceled;
+      saveTxs(txs);
+      // 取消時は元の影響を逆符号で打ち消す。復活時は再度適用。
+      applyBalanceForTx(t, t.canceled? -1 : +1);
+      render();
+    }
 
     // ===== メイン現預金の手動設定 =====
     function openSetCash(){ const m = getMain(); el.cashAmount.value = m? m.balance : 0; el.dlgCash.showModal(); }
@@ -357,7 +452,11 @@
     // ===== 資金移動（振替） =====
     function openTransfer(){ const accs = loadAccs(); const others = accs.filter(a=>!a.isMain); if(others.length===0){ alert('まずは口座管理からメイン以外の口座を追加してください'); return; } el.tfAccount.innerHTML = others.map(a=>`<option value="${a.id}">${a.name}</option>`).join(''); el.tfDate.value = new Date().toISOString().slice(0,10); updateTransferBalances(); el.dlgTransfer.showModal(); }
     function updateTransferBalances(){ const accs = loadAccs(); const m = accs.find(a=>a.isMain); const target = accs.find(a=>a.id===Number(el.tfAccount.value)); if(!m||!target){ el.tfBalances.textContent=''; return;} el.tfBalances.textContent = `メイン：${yen(m.balance)} / 対象：${target.name}：${yen(target.balance)}`; }
-    function doTransfer(e){ e.preventDefault(); const accs = loadAccs(); const m = accs.find(a=>a.isMain); const target = accs.find(a=>a.id===Number(el.tfAccount.value)); const dir = el.tfDirection.value; const amt = Math.max(0, Number(el.tfAmount.value||0)); if(!m||!target) return; if(amt<=0){ alert('金額を入力してください'); return; } if(dir==='main_to_acc'){ if(m.balance<amt){ alert('メインの残高が不足しています'); return; } m.balance -= amt; target.balance += amt; } else { if(target.balance<amt){ alert('対象口座の残高が不足しています'); return; } target.balance -= amt; m.balance += amt; } saveAccs(accs); const txs = loadTxs(); txs.push({ date: el.tfDate.value, type:'transfer', amount: amt, memo: el.tfMemo.value, direction: dir, fromName: dir==='acc_to_main'? target.name : 'メイン', toName: dir==='main_to_acc'? target.name : 'メイン' }); saveTxs(txs); el.dlgTransfer.close(); render(); }
+    function doTransfer(e){ e.preventDefault(); const accs = loadAccs(); const m = accs.find(a=>a.isMain); const target = accs.find(a=>a.id===Number(el.tfAccount.value)); const dir = el.tfDirection.value; const amt = Math.max(0, Number(el.tfAmount.value||0)); if(!m||!target) return; if(amt<=0){ alert('金額を入力してください'); return; } const tx = { id: Date.now()+Math.floor(Math.random()*1e6), date: el.tfDate.value, type:'transfer', amount: amt, memo: el.tfMemo.value, direction: dir, fromName: dir==='acc_to_main'? target.name : 'メイン', toName: dir==='main_to_acc'? target.name : 'メイン', toId: target.id };
+      // 残高反映
+      applyBalanceForTx(tx, +1);
+      const txs = ensureIds(); txs.push(tx); saveTxs(txs);
+      el.dlgTransfer.close(); render(); }
 
     // ===== 共有/コピー（安全なフォールバック付き） =====
     function buildUserUrl(){ const url = new URL(location.href); url.searchParams.set('room', ROOM); url.searchParams.set('user', USER); return url.toString(); }
@@ -365,28 +464,10 @@
     function showToast(msg){ if(!el.toast) return; el.toast.textContent = msg; el.toast.classList.add('show'); setTimeout(()=> el.toast.classList.remove('show'), 1800); }
 
     async function safeClipboardWrite(text){
-      // 1) Web Share API（モバイル中心）
-      try{ if(navigator.share){ await navigator.share({ title:'現金出納リンク', url:text }); showToast('共有を開きました'); return 'share'; } }catch(e){ /* 続行 */ }
-      // 2) Clipboard API（HTTPS等の許可環境）
-      try{
-        if(navigator.clipboard && window.isSecureContext){
-          await navigator.clipboard.writeText(text);
-          showToast('リンクをコピーしました');
-          return 'clipboard';
-        }
-      }catch(e){ /* 続行（NotAllowedError等）*/ }
-      // 3) execCommand フォールバック（許可されていれば動作）
-      try{
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.left='-9999px';
-        document.body.appendChild(ta); ta.focus(); ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        if(ok){ showToast('リンクをコピーしました'); return 'execCommand'; }
-      }catch(e){ /* 続行 */ }
-      // 4) 最終フォールバック：ダイアログに表示して手動コピー
-      openShareFallback(text);
-      return 'fallback';
+      try{ if(navigator.share){ await navigator.share({ title:'現金出納リンク', url:text }); showToast('共有を開きました'); return 'share'; } }catch(e){ }
+      try{ if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(text); showToast('リンクをコピーしました'); return 'clipboard'; } }catch(e){ }
+      try{ const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.left='-9999px'; document.body.appendChild(ta); ta.focus(); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta); if(ok){ showToast('リンクをコピーしました'); return 'execCommand'; } }catch(e){ }
+      openShareFallback(text); return 'fallback';
     }
 
     function openShareFallback(text){ el.shareUrl.value = text; el.dlgShare.showModal(); setTimeout(()=>{ el.shareUrl.focus(); el.shareUrl.select(); }, 50); }
@@ -413,11 +494,13 @@
       // share/copy
       el.btnCopyLink.addEventListener('click', ()=>{ shareOrCopyLink(); });
       el.btnSelectUrl.addEventListener('click', ()=>{ el.shareUrl.focus(); el.shareUrl.select(); showToast('URLを選択しました'); });
+      // edit
+      el.editForm.addEventListener('submit', saveEdit);
       // tests
       el.btnRunTests?.addEventListener('click', runTests);
     }
 
-    // ====== テスト（無変更・軽量で元データを復元） ======
+    // ====== 既存テスト（変更なし）＋追加テスト ======
     function runTests(){
       const out=[]; const log=s=>out.push(s);
       const snap={ txs: loadTxs(), accs: loadAccs() };
@@ -428,13 +511,34 @@
         try{ shareOrCopyLink().then(mode=>{ log('✅ T2: 共有/コピー呼び出し OK（mode='+mode+'）'); el.testOutput.textContent = out.join('\n'); }); }catch(e){ log('❌ T2: 共有/コピーで例外: '+(e.message||e)); }
         // T3: 取引追加→メイン残高更新→復元
         try{
-          const before = getMain().balance; const txs = loadTxs().slice();
-          txs.push({date:'2099-01-01',type:'income',category:'臨時',amount:1234,memo:'__TEST__'}); saveTxs(txs);
-          const accs = loadAccs(); const m = accs.find(a=>a.isMain); m.balance += 1234; saveAccs(accs); render();
+          const before = getMain().balance; const txs = ensureIds();
+          const tmp = {id:9999999,date:'2099-01-01',type:'income',category:'臨時',amount:1234,memo:'__TEST__'}; txs.push(tmp); saveTxs(txs); applyBalanceForTx(tmp, +1); render();
           if(getMain().balance === before + 1234){ log('✅ T3: 収入でメイン残高が増加'); } else { log('❌ T3: 残高が期待値と一致しない'); }
         }catch(e){ log('❌ T3: 取引追加テストで例外: '+(e.message||e)); }
         // T4: 振替ログが集計に含まれない（目視確認）
         log('✅ T4: 振替は収支集計に含めない（UIの文言どおり）');
+        // T5: 金額変更で残高が差分分だけ更新
+        try{
+          const txs = ensureIds(); const t = txs.find(x=>x.id===9999999);
+          const before = getMain().balance; // 現在は1234が反映済み
+          // +100へ変更（1334）
+          editingId = t.id; el.editAmount.value = 1334; el.editMemo.value = 'edit';
+          // 直接関数を呼ぶためフォームイベントオブジェクトを作る
+          saveEdit({ preventDefault: ()=>{} });
+          const after = getMain().balance;
+          if(after === before + 100) log('✅ T5: 金額変更の差分反映 OK'); else log('❌ T5: 差分反映が不正');
+        }catch(e){ log('❌ T5: 金額変更テストで例外: '+(e.message||e)); }
+        // T6: 取消→残高が元に戻る→復活で再適用
+        try{
+          const txs = ensureIds(); const t = txs.find(x=>x.id===9999999);
+          const b1 = getMain().balance;
+          toggleCancelTx(t.id); // 取消
+          const b2 = getMain().balance;
+          if(b2 === b1 - t.amount) log('✅ T6-1: 取消で残高を戻す OK'); else log('❌ T6-1: 取消反映が不正');
+          toggleCancelTx(t.id); // 復活
+          const b3 = getMain().balance;
+          if(b3 === b2 + t.amount) log('✅ T6-2: 復活で再適用 OK'); else log('❌ T6-2: 復活反映が不正');
+        }catch(e){ log('❌ T6: 取消テストで例外: '+(e.message||e)); }
       } finally {
         // 復元
         jsonSet(LS.TXS, snap.txs); jsonSet(ACC.ACCS, snap.accs); render();
